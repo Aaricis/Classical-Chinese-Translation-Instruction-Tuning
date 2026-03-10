@@ -1,0 +1,7 @@
+# === 基本核心版本（必须） ===
+torch==2.4.1
+transformers>=4.51.0
+bitsandbytes==0.44.1
+peft==0.13.0
+datasets==3.0.1
+gdown
