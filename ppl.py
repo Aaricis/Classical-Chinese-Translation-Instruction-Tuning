@@ -14,60 +14,64 @@ def perplexity(
     data,
     max_length=2048,
 ):
+    device = next(model.parameters()).device
+
     data_size = len(data)
     instructions = [get_prompt(x["instruction"]) for x in data]
     outputs = [x["output"] for x in data]
 
-    # Tokenize data
     tokenized_instructions = tokenizer(instructions, add_special_tokens=False)
     tokenized_outputs = tokenizer(outputs, add_special_tokens=False)
     output_masks = []
 
-    # Format data
     for i in range(data_size):
-        instruction_input_ids = [tokenizer.bos_token_id] + tokenized_instructions[
-            "input_ids"
-        ][i]
+        instruction_input_ids = [tokenizer.bos_token_id] + tokenized_instructions["input_ids"][i]
         output_input_ids = tokenized_outputs["input_ids"][i] + [tokenizer.eos_token_id]
-        tokenized_instructions["input_ids"][i] = (
-            instruction_input_ids + output_input_ids
-        )
-        tokenized_instructions["attention_mask"][i] = [1] * len(
-            tokenized_instructions["input_ids"][i]
-        )
+
+        tokenized_instructions["input_ids"][i] = instruction_input_ids + output_input_ids
+        tokenized_instructions["attention_mask"][i] = [1] * len(tokenized_instructions["input_ids"][i])
+
         output_mask = [0] * len(instruction_input_ids) + [1] * len(output_input_ids)
 
         tokenized_instructions["input_ids"][i] = torch.tensor(
             tokenized_instructions["input_ids"][i][:max_length]
         )
+
         tokenized_instructions["attention_mask"][i] = torch.tensor(
             tokenized_instructions["attention_mask"][i][:max_length]
         )
+
         output_mask = torch.tensor(output_mask[:max_length])
+
         output_masks.append(output_mask)
 
-    # Calculate ppl
     ppls = []
     loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+
     for i in tqdm(range(data_size)):
-        input_ids = tokenized_instructions["input_ids"][i].unsqueeze(0).cuda()
-        attn_mask = tokenized_instructions["attention_mask"][i].unsqueeze(0).cuda()
-        output_mask = output_masks[i].unsqueeze(0).cuda()
+
+        input_ids = tokenized_instructions["input_ids"][i].unsqueeze(0).to(device)
+        attn_mask = tokenized_instructions["attention_mask"][i].unsqueeze(0).to(device)
+        output_mask = output_masks[i].unsqueeze(0).to(device)
+
         label = input_ids
 
         with torch.no_grad():
-            out_logits = model(input_ids, attention_mask=attn_mask).logits
+            out_logits = model(input_ids=input_ids, attention_mask=attn_mask).logits
 
-        shift_logits = out_logits[..., :-1, :].contiguous().cuda()
+        shift_logits = out_logits[..., :-1, :].contiguous()
         shift_label = label[..., 1:].contiguous()
         shift_output_mask = output_mask[..., 1:].contiguous()
+
         perplexity_batch = torch.exp(
             (
                 loss_fct(shift_logits.transpose(1, 2), shift_label) * shift_output_mask
             ).sum(1)
             / shift_output_mask.sum(1)
         )
+
         ppls += perplexity_batch.tolist()
+
     return {"perplexities": ppls, "mean_perplexity": np.mean(ppls)}
 
 
@@ -132,5 +136,9 @@ if __name__ == "__main__":
         data = json.load(f)
 
     model.eval()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+
     ppl = perplexity(model, tokenizer, data)
     print("Mean perplexity:", ppl["mean_perplexity"])
