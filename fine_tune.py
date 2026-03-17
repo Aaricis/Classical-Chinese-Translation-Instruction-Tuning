@@ -1,19 +1,55 @@
 import argparse
 import os
+
+import torch
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
-from utils import get_prompt_with_template, get_bnb_config
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorForSeq2Seq
+
+from utils import get_prompt_with_template, get_bnb_config
+
+
+def compute_metrics(eval_pred):
+    """Compute perplexity as evaluation metric."""
+    logits_np, labels_np = eval_pred
+    logits = torch.from_numpy(logits_np)
+    labels = torch.from_numpy(labels_np)
+
+    # Reshape logits and labels for all batches at once
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+
+    # Mask for valid tokens (where labels are not -100)
+    output_mask = (shift_labels != -100).float()
+
+    # Use CrossEntropyLoss directly to get the loss
+    loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+    loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+
+    # Mask the loss to ignore padding
+    masked_loss = loss * output_mask.view(-1)
+
+    # Calculate perplexity for all sequences
+    num_valid_tokens = output_mask.sum().item()  # Convert to Python float for later use
+    sum_loss = masked_loss.sum().item()
+
+    # Ensure that the result is a tensor for compatibility
+    if num_valid_tokens > 0:
+        perplexity = torch.exp(torch.tensor(sum_loss / num_valid_tokens))
+    else:
+        perplexity = torch.tensor(0.0)
+
+    return {"perplexity": perplexity.item()}
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, default="Qwen/Qwen3-4B", help="Model name or path.")
-    parser.add_argument("--train_data_path", type=str, required=True, default="data/train.json",
+    parser.add_argument("--train_data_path", type=str, default="data/train.json",
                         help="Path to the training dataset.")
-    parser.add_argument("--eval_data_path", type=str, required=True, default="data/public_test.json",
+    parser.add_argument("--eval_data_path", type=str, default="data/public_test.json",
                         help="Path to the evaluation dataset.")
-    parser.add_argument("--output_dir", type=str, required=True, default="./adapter_checkpoint",
+    parser.add_argument("--output_dir", type=str, default="./adapter_checkpoint",
                         help="The output directory where the LoRA adapter will be saved.")
     parser.add_argument("--epoch", type=int, default=1, help="The number of training epochs.")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="The learning rate for training.")
@@ -88,9 +124,12 @@ def main():
     # Load model with bnb_config and prepare for QLoRA training
     bnb_config = get_bnb_config()
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, quantization_config=bnb_config, device_map="auto", trust_remote_code=True, use_cache=False
+        args.model_path, quantization_config=bnb_config, device_map=None, trust_remote_code=True, use_cache=False
     )
     model = prepare_model_for_kbit_training(model)
+    model.config.use_cache = False
+    model.gradient_checkpointing_enable()
+
     lora_config = LoraConfig(
         r=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -128,10 +167,18 @@ def main():
         save_strategy="best",
         save_total_limit=1,
         load_best_model_at_end=True,
-        metric_for_best_model="loss",
+        metric_for_best_model="perplexity",
         greater_is_better=False,
         seed=args.seed,
         bf16=True
+    )
+
+    # Data collator
+    data_collator = DataCollatorForSeq2Seq(
+        tokenizer=tokenizer,
+        model=model,
+        padding=True,
+        label_pad_token_id=-100,
     )
 
     # Trainer
@@ -140,7 +187,8 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
+        data_collator=data_collator,
+        compute_metrics=compute_metrics
     )
 
     # Train
