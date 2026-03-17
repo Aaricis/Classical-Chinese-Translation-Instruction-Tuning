@@ -4,7 +4,7 @@ import os
 import torch
 from datasets import load_dataset
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorForSeq2Seq
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorForLanguageModeling
 
 from utils import get_prompt_with_template, get_bnb_config
 
@@ -127,8 +127,8 @@ def main():
         args.model_path, quantization_config=bnb_config, device_map=None, trust_remote_code=True, use_cache=False
     )
     model = prepare_model_for_kbit_training(model)
-    model.config.use_cache = False
     model.gradient_checkpointing_enable()
+    model.config.use_cache = False
 
     lora_config = LoraConfig(
         r=args.lora_rank,
@@ -157,28 +157,25 @@ def main():
         num_train_epochs=args.epoch,
         learning_rate=args.learning_rate,
         lr_scheduler_type="cosine",
-        warmup_ratio=args.warmup_ratio,
+        warmup_steps=args.warmup_ratio,
         report_to=["tensorboard"],
         per_device_eval_batch_size=args.eval_batch_size,
         eval_strategy="steps",
         logging_strategy="steps",
-        logging_steps=20,
-        logging_dir=os.path.join(args.output_dir, "logs"),
+        logging_steps=100,
         save_strategy="best",
         save_total_limit=1,
         load_best_model_at_end=True,
-        metric_for_best_model="perplexity",
+        metric_for_best_model="loss",
         greater_is_better=False,
         seed=args.seed,
         bf16=True
     )
 
     # Data collator
-    data_collator = DataCollatorForSeq2Seq(
+    data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
-        model=model,
-        padding=True,
-        label_pad_token_id=-100,
+        mlm=False
     )
 
     # Trainer
@@ -188,7 +185,6 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=data_collator,
-        compute_metrics=compute_metrics
     )
 
     # Train
