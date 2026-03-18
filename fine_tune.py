@@ -4,9 +4,11 @@ import os
 import torch
 from datasets import load_dataset
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorForLanguageModeling
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, \
+    DataCollatorForLanguageModeling
 
 from utils import get_prompt_with_template, get_bnb_config
+from datetime import datetime
 
 
 def compute_metrics(eval_pred):
@@ -42,6 +44,26 @@ def compute_metrics(eval_pred):
     return {"perplexity": perplexity.item()}
 
 
+def get_output_dir(base_dir, lora_rank, lora_alpha, model_name=None):
+    """生成带时间戳的输出目录"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # 构建路径组件
+    components = [
+        f"r{lora_rank}",  # r16
+        f"a{lora_alpha}",  # a32
+        timestamp,  # 20250317_143052
+    ]
+
+    # 可选：添加模型名缩写
+    if model_name:
+        short_name = model_name.split("/")[-1]  # Qwen3-4B
+        components.insert(0, short_name)
+
+    dir_name = "_".join(components)
+    return os.path.join(base_dir, dir_name)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, default="Qwen/Qwen3-4B", help="Model name or path.")
@@ -64,6 +86,7 @@ def main():
     parser.add_argument("--train_batch_size", type=int, default=8, help="The batch size for training.")
     parser.add_argument("--eval_batch_size", type=int, default=8, help="The batch size for evaluation")
     parser.add_argument("--warmup_ratio", type=int, default=0.1, help="The warmup proportion for training.")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to the checkpoint for resuming training")
     args = parser.parse_args()
 
     # Load tokenizer
@@ -149,9 +172,17 @@ def main():
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
+    # Define output dir
+    output_dir = get_output_dir(
+        args.output_dir,  # ./outputs
+        args.lora_rank,  # 32
+        args.lora_alpha,  # 64
+        args.model_path  # Qwen/Qwen3-4B（可选）
+    )  # 结果：./outputs/Qwen3-4B_r32_a64_20250317_143052
+
     # Define training arguments
     training_args = TrainingArguments(
-        output_dir=args.output_dir,
+        output_dir=output_dir,
         per_device_train_batch_size=args.train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_train_epochs=args.epoch,
@@ -161,6 +192,7 @@ def main():
         report_to=["tensorboard"],
         per_device_eval_batch_size=args.eval_batch_size,
         eval_strategy="steps",
+        eval_steps=100,
         logging_strategy="steps",
         logging_steps=100,
         save_strategy="best",
@@ -188,11 +220,11 @@ def main():
     )
 
     # Train
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     # Save final adapter
-    model.save_pretrained(args.output_dir)
-    print(f"Done! Model saved at {args.output_dir}")
+    model.save_pretrained(output_dir)
+    print(f"Done! Model saved to {output_dir}")
 
 
 if __name__ == "__main__":
