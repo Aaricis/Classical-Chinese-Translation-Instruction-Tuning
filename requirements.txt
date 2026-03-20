@@ -1,8 +1,10 @@
 # === 基本核心版本（必须） ===
-torch==2.4.1
+torch==2.6.0
 transformers>=4.51.0
-bitsandbytes==0.44.1
+bitsandbytes==0.49.2
 peft==0.13.0
 datasets==3.0.1
 gdown
+
+# ===日志记录===
 tensorboard
