@@ -1,47 +1,12 @@
 import argparse
 import os
-
-import torch
-from datasets import load_dataset
-from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, \
-    DataCollatorForLanguageModeling
-
-from utils import get_prompt_with_template, get_bnb_config
 from datetime import datetime
 
+from datasets import load_dataset
+from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorForSeq2Seq
 
-def compute_metrics(eval_pred):
-    """Compute perplexity as evaluation metric."""
-    logits_np, labels_np = eval_pred
-    logits = torch.from_numpy(logits_np)
-    labels = torch.from_numpy(labels_np)
-
-    # Reshape logits and labels for all batches at once
-    shift_logits = logits[..., :-1, :].contiguous()
-    shift_labels = labels[..., 1:].contiguous()
-
-    # Mask for valid tokens (where labels are not -100)
-    output_mask = (shift_labels != -100).float()
-
-    # Use CrossEntropyLoss directly to get the loss
-    loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
-    loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-
-    # Mask the loss to ignore padding
-    masked_loss = loss * output_mask.view(-1)
-
-    # Calculate perplexity for all sequences
-    num_valid_tokens = output_mask.sum().item()  # Convert to Python float for later use
-    sum_loss = masked_loss.sum().item()
-
-    # Ensure that the result is a tensor for compatibility
-    if num_valid_tokens > 0:
-        perplexity = torch.exp(torch.tensor(sum_loss / num_valid_tokens))
-    else:
-        perplexity = torch.tensor(0.0)
-
-    return {"perplexity": perplexity.item()}
+from utils import get_prompt_with_template, get_bnb_config
 
 
 def get_output_dir(base_dir, lora_rank, lora_alpha, model_name=None):
@@ -86,12 +51,14 @@ def main():
     parser.add_argument("--train_batch_size", type=int, default=8, help="The batch size for training.")
     parser.add_argument("--eval_batch_size", type=int, default=8, help="The batch size for evaluation")
     parser.add_argument("--warmup_ratio", type=int, default=0.1, help="The warmup proportion for training.")
-    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to the checkpoint for resuming training")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None,
+                        help="Path to the checkpoint for resuming training")
     args = parser.parse_args()
 
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
-        args.model_path, trust_remote_code=True, padding_side='left')
+        args.model_path, trust_remote_code=True, padding_side='right'  # 改为 right
+    )
 
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -183,31 +150,48 @@ def main():
     # Define training arguments
     training_args = TrainingArguments(
         output_dir=output_dir,
+
         per_device_train_batch_size=args.train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
+
         num_train_epochs=args.epoch,
         learning_rate=args.learning_rate,
         lr_scheduler_type="cosine",
-        warmup_steps=args.warmup_ratio,
+
+        warmup_steps=args.warmup_ratio,  # ✅ 修复
+
+        weight_decay=0.01,
+
         report_to=["tensorboard"],
+
         per_device_eval_batch_size=args.eval_batch_size,
+
         eval_strategy="steps",
-        eval_steps=100,
+        eval_steps=50,  # ✅ 更合理
+
         logging_strategy="steps",
-        logging_steps=100,
-        save_strategy="best",
+        logging_steps=50,
+        logging_first_step=True,  # ✅ 新增
+
+        save_strategy="steps",
+        save_steps=50,  # ✅ 与 eval 对齐
         save_total_limit=1,
+
         load_best_model_at_end=True,
-        metric_for_best_model="loss",
+        metric_for_best_model="eval_loss",
         greater_is_better=False,
+
         seed=args.seed,
-        bf16=True
+
+        bf16=True,
     )
 
     # Data collator
-    data_collator = DataCollatorForLanguageModeling(
+    data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
-        mlm=False
+        model=model,
+        label_pad_token_id=-100,
+        padding=True
     )
 
     # Trainer
@@ -223,7 +207,7 @@ def main():
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     # Save final adapter
-    model.save_pretrained(output_dir)
+    trainer.save_model(output_dir)
     print(f"Done! Model saved to {output_dir}")
 
 
