@@ -50,7 +50,7 @@ def main():
     parser.add_argument("--lora_dropout", type=float, default=0.05, help="The Lora dropout probability for training.")
     parser.add_argument("--train_batch_size", type=int, default=8, help="The batch size for training.")
     parser.add_argument("--eval_batch_size", type=int, default=8, help="The batch size for evaluation")
-    parser.add_argument("--warmup_ratio", type=int, default=0.1, help="The warmup proportion for training.")
+    parser.add_argument("--warmup_ratio", type=float, default=0.1, help="The warmup proportion for training.")
     parser.add_argument("--resume_from_checkpoint", type=str, default=None,
                         help="Path to the checkpoint for resuming training")
     args = parser.parse_args()
