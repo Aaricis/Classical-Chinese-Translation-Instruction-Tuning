@@ -4,9 +4,10 @@ from datetime import datetime
 
 from datasets import load_dataset
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorForSeq2Seq
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, \
+    DataCollatorForSeq2Seq
 
-from utils import get_prompt_with_template, get_bnb_config
+from utils import get_bnb_config, get_prompt
 
 
 def get_output_dir(base_dir, lora_rank, lora_alpha, model_name=None):
@@ -74,32 +75,28 @@ def main():
         }
 
         for instruction, output in zip(examples["instruction"], examples["output"]):
-            prompt = get_prompt_with_template(instruction, tokenizer)
+            prompt = get_prompt(instruction)
+            output = output or ""
+
             answer = output + tokenizer.eos_token
 
-            prompt_ids = tokenizer(
-                prompt,
-                add_special_tokens=False,
-            )["input_ids"]
-
-            answer_ids = tokenizer(
-                answer,
-                add_special_tokens=False
-            )["input_ids"]
+            prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+            answer_ids = tokenizer(answer, add_special_tokens=False)["input_ids"]
 
             input_ids = prompt_ids + answer_ids
+            labels = [-100] * len(prompt_ids) + answer_ids
+
+            if len(input_ids) > args.max_seq_length:
+                overflow = len(input_ids) - args.max_seq_length
+                input_ids = input_ids[overflow:]
+                labels = labels[overflow:]
+
             attention_mask = [1] * len(input_ids)
-
-            labels = [-100] * len(prompt_ids) + answer_ids  # # Mask instruction for loss
-
-            # truncate
-            input_ids = input_ids[:args.max_seq_length]
-            attention_mask = attention_mask[:args.max_seq_length]
-            labels = labels[:args.max_seq_length]
 
             model_inputs["input_ids"].append(input_ids)
             model_inputs["attention_mask"].append(attention_mask)
             model_inputs["labels"].append(labels)
+
         return model_inputs
 
     # Load dataset
@@ -114,7 +111,7 @@ def main():
     # Load model with bnb_config and prepare for QLoRA training
     bnb_config = get_bnb_config()
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, quantization_config=bnb_config, device_map=None, trust_remote_code=True, use_cache=False
+        args.model_path, quantization_config=bnb_config, device_map="auto", trust_remote_code=True, use_cache=False
     )
     model = prepare_model_for_kbit_training(model)
     model.gradient_checkpointing_enable()
@@ -161,6 +158,7 @@ def main():
         warmup_steps=args.warmup_ratio,  # ✅ 修复
 
         weight_decay=0.01,
+        max_grad_norm=0.3, # 防止梯度爆炸（QLoRA 推荐）
 
         report_to=["tensorboard"],
 
@@ -175,7 +173,7 @@ def main():
 
         save_strategy="steps",
         save_steps=50,  # ✅ 与 eval 对齐
-        save_total_limit=1,
+        save_total_limit=2,
 
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
@@ -184,14 +182,16 @@ def main():
         seed=args.seed,
 
         bf16=True,
+        prediction_loss_only=True
     )
 
     # Data collator
     data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
         model=model,
+        padding=True,  # 或 "longest"
+        max_length=args.max_seq_length,
         label_pad_token_id=-100,
-        padding=True
     )
 
     # Trainer
