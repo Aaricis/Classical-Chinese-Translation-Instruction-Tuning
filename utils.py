@@ -79,9 +79,12 @@ import torch
 #
 #     return messages
 
-def get_prompt(instruction: str) -> str:
-    return f"你是一位精通古漢語與現代漢語的翻譯專家。請準確翻譯下列文本，只輸出譯文。\
-            {instruction}"
+# def get_prompt(instruction: str) -> str:
+#     return f"你是一位精通古漢語與現代漢語的翻譯專家。請準確翻譯下列文本，只輸出譯文。\
+#             {instruction}"
+
+def get_prompt(instruction):
+    return f"{instruction.strip()}"
 
 def build_messages(instruction):
     return [
