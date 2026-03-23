@@ -2,10 +2,10 @@ import argparse
 import os
 from datetime import datetime
 
+import torch
 from datasets import load_dataset
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, \
-    DataCollatorForSeq2Seq
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
 
 from utils import get_bnb_config, get_prompt
 
@@ -78,18 +78,19 @@ def main():
             prompt = get_prompt(instruction)
             output = output or ""
 
-            answer = output + tokenizer.eos_token
+            answer_ids = tokenizer(output, add_special_tokens=False)["input_ids"]
+            if len(answer_ids) < 5:  # 过滤超短样本
+                continue
 
+            answer_ids = answer_ids + [tokenizer.eos_token_id]
             prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
-            answer_ids = tokenizer(answer, add_special_tokens=False)["input_ids"]
 
             input_ids = prompt_ids + answer_ids
             labels = [-100] * len(prompt_ids) + answer_ids
 
-            if len(input_ids) > args.max_seq_length:
-                overflow = len(input_ids) - args.max_seq_length
-                input_ids = input_ids[overflow:]
-                labels = labels[overflow:]
+            if len(input_ids) > args.max_seq_length:  # 始终保留尾部（answer）
+                input_ids = input_ids[-args.max_seq_length:]
+                labels = labels[-args.max_seq_length:]
 
             attention_mask = [1] * len(input_ids)
 
@@ -158,7 +159,7 @@ def main():
         warmup_steps=args.warmup_ratio,  # ✅ 修复
 
         weight_decay=0.01,
-        max_grad_norm=0.3, # 防止梯度爆炸（QLoRA 推荐）
+        max_grad_norm=0.3,  # 防止梯度爆炸（QLoRA 推荐）
 
         report_to=["tensorboard"],
 
@@ -182,17 +183,36 @@ def main():
         seed=args.seed,
 
         bf16=True,
-        prediction_loss_only=True
+        prediction_loss_only=True,
+        label_smoothing_factor=0.1
     )
 
     # Data collator
-    data_collator = DataCollatorForSeq2Seq(
-        tokenizer=tokenizer,
-        model=model,
-        padding=True,  # 或 "longest"
-        max_length=args.max_seq_length,
-        label_pad_token_id=-100,
-    )
+
+    def custom_collator(features):
+        input_ids = [f["input_ids"] for f in features]
+        labels = [f["labels"] for f in features]
+
+        # 用 tokenizer pad input_ids
+        batch = tokenizer.pad(
+            {"input_ids": input_ids},
+            padding=True,
+            return_tensors="pt"
+        )
+
+        # 手动 pad labels（关键！）
+        max_len = batch["input_ids"].shape[1]
+        padded_labels = []
+
+        for label in labels:
+            pad_len = max_len - len(label)
+            padded_labels.append(label + [-100] * pad_len)
+
+        batch["labels"] = torch.tensor(padded_labels)
+
+        return batch
+
+    data_collator = custom_collator
 
     # Trainer
     trainer = Trainer(
