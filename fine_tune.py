@@ -5,7 +5,7 @@ from datetime import datetime
 import torch
 from datasets import load_dataset
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, EarlyStoppingCallback
 
 from utils import get_bnb_config, get_prompt
 
@@ -158,7 +158,7 @@ def main():
 
         warmup_steps=args.warmup_ratio,  # ✅ 修复
 
-        weight_decay=0.01,
+        weight_decay=0.05,
         max_grad_norm=0.3,  # 防止梯度爆炸（QLoRA 推荐）
 
         report_to=["tensorboard"],
@@ -221,6 +221,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=data_collator,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
     )
 
     # Train
