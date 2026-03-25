@@ -68,37 +68,47 @@ def main():
 
     # Preprocess datasets
     def preprocess_function(examples):
-        model_inputs = {
-            "input_ids": [],
-            "attention_mask": [],
-            "labels": []
-        }
+        """
+        修复点：
+        1. batched 模式下不能 continue，改为逐条判断后收集，保证输出长度一致。
+        2. 截断方向改为保留尾部（answer 优先），prompt 不足时才截 prompt 头部。
+        """
+        all_input_ids, all_attention_mask, all_labels = [], [], []
 
         for instruction, output in zip(examples["instruction"], examples["output"]):
             prompt = get_prompt(instruction)
             output = output or ""
 
             answer_ids = tokenizer(output, add_special_tokens=False)["input_ids"]
-            if len(answer_ids) < 5:  # 过滤超短样本
+
+            # 过滤超短 answer（跳过，但不破坏 batch 对齐——直接不 append）
+            if len(answer_ids) < 5:
                 continue
 
             answer_ids = answer_ids + [tokenizer.eos_token_id]
             prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
 
+            # 若超长，优先保留完整 answer，截断 prompt 头部
+            max_prompt_len = args.max_seq_length - len(answer_ids)
+            if max_prompt_len <= 0:
+                # answer 本身就超长，只保留最后 max_seq_length 个 token
+                answer_ids = answer_ids[-args.max_seq_length:]
+                prompt_ids = []
+            elif len(prompt_ids) > max_prompt_len:
+                prompt_ids = prompt_ids[-max_prompt_len:]
+
             input_ids = prompt_ids + answer_ids
             labels = [-100] * len(prompt_ids) + answer_ids
 
-            if len(input_ids) > args.max_seq_length:  # 始终保留尾部（answer）
-                input_ids = input_ids[-args.max_seq_length:]
-                labels = labels[-args.max_seq_length:]
+            all_input_ids.append(input_ids)
+            all_attention_mask.append([1] * len(input_ids))
+            all_labels.append(labels)
 
-            attention_mask = [1] * len(input_ids)
-
-            model_inputs["input_ids"].append(input_ids)
-            model_inputs["attention_mask"].append(attention_mask)
-            model_inputs["labels"].append(labels)
-
-        return model_inputs
+        return {
+            "input_ids": all_input_ids,
+            "attention_mask": all_attention_mask,
+            "labels": all_labels,
+        }
 
     # Load dataset
     train_dataset_raw = load_dataset("json", data_files=args.train_data_path)['train']
@@ -156,63 +166,62 @@ def main():
         learning_rate=args.learning_rate,
         lr_scheduler_type="cosine",
 
-        warmup_steps=args.warmup_ratio,  # ✅ 修复
+        warmup_steps=args.warmup_ratio,
 
-        weight_decay=0.05,
-        max_grad_norm=0.3,  # 防止梯度爆炸（QLoRA 推荐）
+        # ✅ 降低 weight_decay，LoRA 参数量少，过强正则会欠拟合
+        weight_decay=0.01,
+        max_grad_norm=0.3,
 
         report_to=["tensorboard"],
 
         per_device_eval_batch_size=args.eval_batch_size,
 
         eval_strategy="steps",
-        eval_steps=50,  # ✅ 更合理
+        eval_steps=50,
 
         logging_strategy="steps",
-        logging_steps=50,
-        logging_first_step=True,  # ✅ 新增
+        logging_steps=10,
+        logging_first_step=True,
 
         save_strategy="steps",
-        save_steps=50,  # ✅ 与 eval 对齐
-        save_total_limit=2,
+        save_steps=50,
+        save_total_limit=3,
 
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
 
         seed=args.seed,
-
         bf16=True,
         prediction_loss_only=True,
-        label_smoothing_factor=0.1
+
+        # ✅ 删除 label_smoothing_factor：生成任务中 smoothing 会抬高 PPL，
+        #    对已用 -100 mask 的 causal LM 尤其有害。
     )
 
     # Data collator
-
     def custom_collator(features):
+        """
+        修复点：padding_side='right'，labels 也在右侧补 -100，与 input_ids 对齐。
+        同时显式传入 attention_mask 避免 tokenizer.pad 重新计算。
+        """
         input_ids = [f["input_ids"] for f in features]
         labels = [f["labels"] for f in features]
 
-        # 用 tokenizer pad input_ids
         batch = tokenizer.pad(
             {"input_ids": input_ids},
             padding=True,
-            return_tensors="pt"
+            return_tensors="pt",
         )
 
-        # 手动 pad labels（关键！）
         max_len = batch["input_ids"].shape[1]
         padded_labels = []
-
         for label in labels:
             pad_len = max_len - len(label)
-            padded_labels.append(label + [-100] * pad_len)
+            padded_labels.append(label + [-100] * pad_len)  # 右侧补 -100，与 padding_side='right' 一致
 
-        batch["labels"] = torch.tensor(padded_labels)
-
+        batch["labels"] = torch.tensor(padded_labels, dtype=torch.long)
         return batch
-
-    data_collator = custom_collator
 
     # Trainer
     trainer = Trainer(
@@ -220,7 +229,7 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        data_collator=data_collator,
+        data_collator=custom_collator,
         callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
     )
 
