@@ -68,11 +68,6 @@ def main():
 
     # Preprocess datasets
     def preprocess_function(examples):
-        """
-        修复点：
-        1. batched 模式下不能 continue，改为逐条判断后收集，保证输出长度一致。
-        2. 截断方向改为保留尾部（answer 优先），prompt 不足时才截 prompt 头部。
-        """
         all_input_ids, all_attention_mask, all_labels = [], [], []
 
         for instruction, output in zip(examples["instruction"], examples["output"]):
@@ -81,17 +76,21 @@ def main():
 
             answer_ids = tokenizer(output, add_special_tokens=False)["input_ids"]
 
-            # 过滤超短 answer（跳过，但不破坏 batch 对齐——直接不 append）
-            if len(answer_ids) < 5:
+            # ✅ 修复：过滤阈值从 < 5 改为 == 0（仅过滤真正空的 output）
+            #
+            # 原代码过滤了 140 条极短样本（output < 5 tokens），但 ppl.py 测试时
+            # 这些样本照常参与评估，模型从未见过，单条 PPL 可达 100+。
+            # 数据分析显示测试集有 7 条此类样本，模拟结果：
+            #   这 7 条 PPL=100 → 全局 mean PPL 从 ~4.6 被拉高到 ~7.2（与实测 7.06 吻合）
+            # 只过滤空 output（== 0）即可消除 train/test 分布不一致。
+            if len(answer_ids) == 0:
                 continue
 
             answer_ids = answer_ids + [tokenizer.eos_token_id]
             prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
 
-            # 若超长，优先保留完整 answer，截断 prompt 头部
             max_prompt_len = args.max_seq_length - len(answer_ids)
             if max_prompt_len <= 0:
-                # answer 本身就超长，只保留最后 max_seq_length 个 token
                 answer_ids = answer_ids[-args.max_seq_length:]
                 prompt_ids = []
             elif len(prompt_ids) > max_prompt_len:
@@ -235,6 +234,8 @@ def main():
 
     # Train
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+    best_checkpoint = trainer.state.best_model_checkpoint  # 获取最佳检查点路径
+    print(f"Best checkpoint: {best_checkpoint}")
 
     # Save final adapter
     trainer.save_model(output_dir)
