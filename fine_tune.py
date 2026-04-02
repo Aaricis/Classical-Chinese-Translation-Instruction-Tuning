@@ -61,12 +61,65 @@ def main():
         args.model_path, trust_remote_code=True, padding_side='right'  # 改为 right
     )
 
+    # 原代码（Qwen3 可用，Llama-3.1 会崩溃）
+    # if tokenizer.pad_token_id is None:
+    #     tokenizer.pad_token_id = tokenizer.eos_token_id
+    # if tokenizer.bos_token_id is None:
+    #     tokenizer.bos_token_id = tokenizer.eos_token_id
+
+    # ✅ 修复后（兼容 Llama-3.1 的列表 eos_token_id）
     if tokenizer.pad_token_id is None:
-        tokenizer.pad_token_id = tokenizer.eos_token_id
+        eos = tokenizer.eos_token_id
+        tokenizer.pad_token_id = eos[0] if isinstance(eos, list) else eos
     if tokenizer.bos_token_id is None:
-        tokenizer.bos_token_id = tokenizer.eos_token_id
+        eos = tokenizer.eos_token_id
+        tokenizer.bos_token_id = eos[0] if isinstance(eos, list) else eos
 
     # Preprocess datasets
+    # Qwen
+    # def preprocess_function(examples):
+    #     all_input_ids, all_attention_mask, all_labels = [], [], []
+    #
+    #     for instruction, output in zip(examples["instruction"], examples["output"]):
+    #         prompt = get_prompt(instruction)
+    #         output = output or ""
+    #
+    #         answer_ids = tokenizer(output, add_special_tokens=False)["input_ids"]
+    #
+    #         # ✅ 修复：过滤阈值从 < 5 改为 == 0（仅过滤真正空的 output）
+    #         #
+    #         # 原代码过滤了 140 条极短样本（output < 5 tokens），但 ppl.py 测试时
+    #         # 这些样本照常参与评估，模型从未见过，单条 PPL 可达 100+。
+    #         # 数据分析显示测试集有 7 条此类样本，模拟结果：
+    #         #   这 7 条 PPL=100 → 全局 mean PPL 从 ~4.6 被拉高到 ~7.2（与实测 7.06 吻合）
+    #         # 只过滤空 output（== 0）即可消除 train/test 分布不一致。
+    #         if len(answer_ids) == 0:
+    #             continue
+    #
+    #         answer_ids = answer_ids + [tokenizer.eos_token_id]
+    #         prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+    #
+    #         max_prompt_len = args.max_seq_length - len(answer_ids)
+    #         if max_prompt_len <= 0:
+    #             answer_ids = answer_ids[-args.max_seq_length:]
+    #             prompt_ids = []
+    #         elif len(prompt_ids) > max_prompt_len:
+    #             prompt_ids = prompt_ids[-max_prompt_len:]
+    #
+    #         input_ids = prompt_ids + answer_ids
+    #         labels = [-100] * len(prompt_ids) + answer_ids
+    #
+    #         all_input_ids.append(input_ids)
+    #         all_attention_mask.append([1] * len(input_ids))
+    #         all_labels.append(labels)
+    #
+    #     return {
+    #         "input_ids": all_input_ids,
+    #         "attention_mask": all_attention_mask,
+    #         "labels": all_labels,
+    #     }
+
+    # Llama
     def preprocess_function(examples):
         all_input_ids, all_attention_mask, all_labels = [], [], []
 
@@ -75,29 +128,27 @@ def main():
             output = output or ""
 
             answer_ids = tokenizer(output, add_special_tokens=False)["input_ids"]
-
-            # ✅ 修复：过滤阈值从 < 5 改为 == 0（仅过滤真正空的 output）
-            #
-            # 原代码过滤了 140 条极短样本（output < 5 tokens），但 ppl.py 测试时
-            # 这些样本照常参与评估，模型从未见过，单条 PPL 可达 100+。
-            # 数据分析显示测试集有 7 条此类样本，模拟结果：
-            #   这 7 条 PPL=100 → 全局 mean PPL 从 ~4.6 被拉高到 ~7.2（与实测 7.06 吻合）
-            # 只过滤空 output（== 0）即可消除 train/test 分布不一致。
             if len(answer_ids) == 0:
                 continue
 
             answer_ids = answer_ids + [tokenizer.eos_token_id]
             prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
 
-            max_prompt_len = args.max_seq_length - len(answer_ids)
+            # ✅ 修复：与 ppl.py 对齐，在序列最前面加 bos_token_id
+            # ppl.py: instruction_input_ids = [bos_token_id] + tokenized_instructions
+            # Llama-3.1 的 bos(128000) 是独立特殊 token，训练时必须包含
+            # Qwen 的 bos == eos，加不加无影响；Llama 不加会导致 train/test 格式不一致
+            bos_ids = [tokenizer.bos_token_id] if tokenizer.bos_token_id is not None else []
+
+            max_prompt_len = args.max_seq_length - len(answer_ids) - len(bos_ids)
             if max_prompt_len <= 0:
                 answer_ids = answer_ids[-args.max_seq_length:]
                 prompt_ids = []
             elif len(prompt_ids) > max_prompt_len:
                 prompt_ids = prompt_ids[-max_prompt_len:]
 
-            input_ids = prompt_ids + answer_ids
-            labels = [-100] * len(prompt_ids) + answer_ids
+            input_ids = bos_ids + prompt_ids + answer_ids
+            labels = [-100] * (len(bos_ids) + len(prompt_ids)) + answer_ids
 
             all_input_ids.append(input_ids)
             all_attention_mask.append([1] * len(input_ids))
@@ -176,14 +227,14 @@ def main():
         per_device_eval_batch_size=args.eval_batch_size,
 
         eval_strategy="steps",
-        eval_steps=50,
+        eval_steps=100,
 
         logging_strategy="steps",
         logging_steps=10,
         logging_first_step=True,
 
         save_strategy="steps",
-        save_steps=50,
+        save_steps=100,
         save_total_limit=3,
 
         load_best_model_at_end=True,
@@ -229,7 +280,7 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=custom_collator,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=5)]
     )
 
     # Train
