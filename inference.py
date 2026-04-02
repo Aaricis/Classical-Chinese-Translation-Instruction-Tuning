@@ -72,17 +72,16 @@ def main():
             output = model.generate(
                 **inputs,
                 max_new_tokens=256,
-                temperature=0.7,
-                top_p=0.9,
                 do_sample=False,
                 pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=tokenizer.eos_token_id,
             )
 
         input_lengths = inputs["attention_mask"].sum(dim=1)
 
         decoded_outputs = []
-        for i, out in enumerate(output):
-            decoded = tokenizer.decode(out[input_lengths[i]:], skip_special_tokens=True)
+        for idx, out in enumerate(output):
+            decoded = tokenizer.decode(out[input_lengths[idx]:], skip_special_tokens=True)
             decoded_outputs.append(decoded)
 
         for j, output in enumerate(decoded_outputs):
@@ -90,12 +89,10 @@ def main():
                 {"id": batch_data[j]['id'], "output": output.strip()}
             )
 
-        if not os.path.exists(os.path.dirname(args.output_path)) and os.path.dirname(args.output_path) != '':
-            os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
-
+    os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
     with open(args.output_path, 'w', encoding='utf-8') as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
-    print(f"Done. Results saved to {args.output_path}")
+    print(f"Inference finished. Results saved to {args.output_path}")
 
 if __name__ == "__main__":
     main()
