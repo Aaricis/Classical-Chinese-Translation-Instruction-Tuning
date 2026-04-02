@@ -3,7 +3,7 @@ import json
 import os
 
 import torch
-import tqdm
+from tqdm import tqdm
 from peft import PeftModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -34,14 +34,20 @@ def main():
 
     # Load model with bnb_config
     bnb_config = get_bnb_config()
+
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, quantization_config=bnb_config, device_map=None, trust_remote_code=True, use_cache=False
+        args.model_path,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True,
+        use_cache=True
     )
 
     # Load LoRA adapter
     if args.adapter_checkpoint_path:
         model = PeftModel.from_pretrained(model, args.adapter_checkpoint_path)
         print(f"Load LoRA adapter from {args.adapter_checkpoint_path}")
+
     model.eval()
 
     # Load test data
@@ -59,27 +65,25 @@ def main():
             prompt = get_prompt_with_template(sample['instruction'], tokenizer)
             prompts.append(prompt)
 
-        inputs = (tokenizer(
-            prompts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=4096
-        ).to(model.device))
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True,max_length=4096)
+        inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
-        with torch.no_grad():
+        with torch.inference_mode(): # 开启推理加速
             output = model.generate(
                 **inputs,
                 max_new_tokens=256,
                 temperature=0.7,
                 top_p=0.9,
-                do_sample=True,
+                do_sample=False,
                 pad_token_id=tokenizer.eos_token_id,
             )
 
-        decoded_outputs = tokenizer.batch_decode(
-            output[:, inputs.input_ids.shape[1]:], skip_special_tokens=True
-        )
+        input_lengths = inputs["attention_mask"].sum(dim=1)
+
+        decoded_outputs = []
+        for i, out in enumerate(output):
+            decoded = tokenizer.decode(out[input_lengths[i]:], skip_special_tokens=True)
+            decoded_outputs.append(decoded)
 
         for j, output in enumerate(decoded_outputs):
             results.append(
@@ -89,9 +93,9 @@ def main():
         if not os.path.exists(os.path.dirname(args.output_path)) and os.path.dirname(args.output_path) != '':
             os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
 
-        with open(args.output_path, 'w', encoding='utf-8') as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-        print(f"Done. Results saved to {args.output_path}")
+    with open(args.output_path, 'w', encoding='utf-8') as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+    print(f"Done. Results saved to {args.output_path}")
 
-    if __name__ == "__main__":
-        main()
+if __name__ == "__main__":
+    main()
