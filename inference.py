@@ -7,7 +7,7 @@ from tqdm import tqdm
 from peft import PeftModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from utils import get_bnb_config, get_prompt_with_template
+from utils import get_bnb_config, get_prompt
 
 
 def main():
@@ -62,7 +62,7 @@ def main():
         batch_data = test_data[i: i + args.batch_size]
         prompts = []
         for sample in batch_data:
-            prompt = get_prompt_with_template(sample['instruction'], tokenizer)
+            prompt = get_prompt(sample['instruction'], tokenizer)
             prompts.append(prompt)
 
         inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True,max_length=4096)
