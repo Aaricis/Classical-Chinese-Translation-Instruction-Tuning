@@ -62,7 +62,7 @@ def main():
         batch_data = test_data[i: i + args.batch_size]
         prompts = []
         for sample in batch_data:
-            prompt = get_prompt(sample['instruction'], tokenizer)
+            prompt = get_prompt(sample['instruction'])
             prompts.append(prompt)
 
         inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True,max_length=4096)
