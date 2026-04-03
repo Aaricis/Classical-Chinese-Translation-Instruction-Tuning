@@ -15,9 +15,9 @@ def main():
         description="Inferencing using a model."
     )
     parser.add_argument("--model_path", type=str, default="Qwen/Qwen3-4B", help="Model name or path.")
-    parser.add_argument("--adapter_checkpoint_path", type=str, default="Qwen/Qwen3-4B",
+    parser.add_argument("--adapter_checkpoint_path", type=str, default="./adapter_checkpoint",
                         help="Path to the adapter checkpoint.")
-    parser.add_argument("--test_data_path", type=str, default="data/public_test.json", help="Path to the test dataset.")
+    parser.add_argument("--test_data_path", type=str, default="./data/public_test.json", help="Path to the test dataset.")
     parser.add_argument("--output_path", type=str, default="output.json", help="Path to save the output.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for inference.")
     args = parser.parse_args()
