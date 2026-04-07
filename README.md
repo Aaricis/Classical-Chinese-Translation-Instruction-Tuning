@@ -112,6 +112,33 @@ python ppl.py \
     --test_data_path "data/public_test.json"
 ```
 
+## Appendix
+使用不同的超参数微调模型，测试结果如下：
+
+| 序号 | 超参数                                                       | 模型                           | 平均困惑度  | 措施                                                         |
+| ---- | ------------------------------------------------------------ | ------------------------------ | ----------- | ------------------------------------------------------------ |
+| 1    | --epoch 1 	<br />--learning_rate 1e-4	<br />--train_batch_size 1	<br />--gradient_accumulation_steps 16 <br />--eval_batch_size 1 	<br />--lora_rank 8 	<br />--lora_alpha 16 	<br />--lora_dropout 0.05 	<br />--max_seq_length 512 | Qwen/Qwen3-4B                  | 18.76153125 |                                                              |
+| 2    | --epoch 2 \ <br/>--learning_rate 1e-4 <br />--train_batch_size 1 <br />--gradient_accumulation_steps 16 <br />--eval_batch_size 1 <br />--lora_rank 8 <br />--lora_alpha 16 <br />--lora_dropout 0.05 <br />--max_seq_length 512 | Qwen/Qwen3-4B                  | 18.61840625 | 增加epoch                                                    |
+| 3    | --epoch 5 <br />--learning_rate 1e-4 <br />--train_batch_size 1 <br />--gradient_accumulation_steps 16 <br />--eval_batch_size 1 <br />--lora_rank 64 <br />--lora_alpha 16 <br />--lora_dropout 0.05 <br />--max_seq_length 512 | Qwen/Qwen3-4B                  | 25.3800625  | r=64 → 过拟合<br />epoch=5 → 过训练<br />alpha/r = 0.25 → 学习效率低 |
+| 4    | --epoch 2 <br />--learning_rate 5e-5 <br />--train_batch_size 1 <br />--gradient_accumulation_steps 16 <br />--eval_batch_size 1 <br />--lora_rank 8 <br />--lora_alpha 16 <br />--lora_dropout 0.05 <br />--max_seq_length 512 | Qwen/Qwen3-4B                  | 19.87884375 | weight_decay=0.01                                            |
+| 5    | --epoch 1<br />--learning_rate 2e-5 <br />--train_batch_size 1 <br />--gradient_accumulation_steps 16<br />--eval_batch_size 1<br />--lora_rank 16 <br />--lora_alpha 32 <br />--lora_dropout 0.05 <br />--max_seq_length 1024 | Qwen/Qwen3-4B                  | 20.968625   | 增加微调参数量                                               |
+| 6    | --epoch 2<br />--learning_rate 2e-5 <br />--train_batch_size 1 <br />--gradient_accumulation_steps 16<br />--eval_batch_size 1<br />--lora_rank 16 <br />--lora_alpha 32 <br />--lora_dropout 0.05 <br />--max_seq_length 1024 | Qwen/Qwen3-4B                  | 19.89896875 | 增加epoch                                                    |
+| 7    | --epoch 3<br />--learning_rate 1e-4 <br />--train_batch_size 2 <br />--gradient_accumulation_steps 8 <br />--eval_batch_size 2<br />--lora_rank 64 <br />--lora_alpha 128 <br />--lora_dropout 0.05 <br />--max_seq_length 1024 <br />--warmup_ratio 0.1 | Qwen/Qwen3-4B                  | 24.64525    | 继续增加微调参数量、epoch                                    |
+| 8    | --epoch 1<br />--learning_rate 2e-5<br />--train_batch_size 2<br />--gradient_accumulation_steps 8 <br />--eval_batch_size 2<br />--lora_rank 16<br />--lora_alpha 32 <br />--lora_dropout 0.05<br />--max_seq_length 1024<br />--warmup_ratio 0.1 | Qwen/Qwen3-4B                  | 17.603125   | 调整eval参数                                                 |
+| 9    | --epoch 2<br /> --learning_rate 2e-5<br /> --train_batch_size 2 <br />--gradient_accumulation_steps 8 <br />--eval_batch_size 2<br />--lora_rank 16<br />--lora_alpha 32 <br />--lora_dropout 0.05<br />--max_seq_length 256<br />--warmup_ratio 0.05 | Qwen/Qwen3-4B                  | 7.22675     | prompt只输入instruction                                      |
+| 10   | --epoch 4 <br />--learning_rate 5e-5 <br />--train_batch_size 2 <br />--gradient_accumulation_steps 16<br />--eval_batch_size 2 <br />--lora_rank 32<br />--lora_alpha 64 <br />--lora_dropout 0.05<br />--max_seq_length 512 <br />--warmup_ratio 0.1 | Qwen/Qwen3-4B                  | 8.1648125   | 增大学习率、epoch、微调参数量、梯度累积                      |
+| 11   | --epoch 3<br />--learning_rate 3e-5<br />--train_batch_size 2 <br />--gradient_accumulation_steps 16<br />--eval_batch_size 2<br />--lora_rank 24<br />--lora_alpha 48<br />--lora_dropout 0.05<br />--max_seq_length 512 <br />--warmup_ratio 0.1 | Qwen/Qwen3-4B                  | 8.428       | 减少epoch、学习率、微调参数量、过滤超短样本                  |
+| 12   | --epoch 3<br />--learning_rate 5e-5<br />--train_batch_size 4<br />--gradient_accumulation_steps 16<br />--eval_batch_size 4<br />--lora_rank 24<br />--lora_alpha 48<br />--lora_dropout 0.05<br />--max_seq_length 512<br />--warmup_ratio 0.1 | Qwen/Qwen3-4B                  | 7.754625    | 不过滤超短样本，增大batch_size                               |
+| 13   | --epoch 5<br />--learning_rate 5e-5<br />--train_batch_size 4<br />--gradient_accumulation_steps 16<br />--eval_batch_size 4<br />--lora_rank 24<br />--lora_alpha 48<br />--lora_dropout 0.05<br />--max_seq_length 512<br />--warmup_ratio 0.1 | Qwen/Qwen3-4B                  | 7.754625    | 增加epoch                                                    |
+| 14   | --epoch 3 <br />--learning_rate 1e-4 <br />--train_batch_size 2 <br />--gradient_accumulation_steps 16<br />--eval_batch_size 2<br />--lora_rank 64<br />--lora_alpha 128<br />--lora_dropout 0.05<br />--max_seq_length 1024<br />--warmup_ratio 0.1 | Qwen/Qwen3-4B                  | 7.05903125  | 增加微调参数量，同时调整epoch、学习率，使用early stopping    |
+| 15   | --epoch 5 <br />--learning_rate 1e-4 <br />--train_batch_size 2 <br />--gradient_accumulation_steps 16<br />--eval_batch_size 2<br />--lora_rank 64<br />--lora_alpha 128<br />--lora_dropout 0.05<br />--max_seq_length 1024<br />--warmup_ratio 0.05 | Qwen/Qwen3-4B                  | 6.71778125  | 不过滤超短样本，降低warmup_ratio                             |
+| 16   | --model_path "yentinglin/Llama-3.1-Taiwan-8B" <br />--epoch 5<br />--learning_rate 7e-5<br />--train_batch_size 2 <br />--gradient_accumulation_steps 16<br />--eval_batch_size 2<br />--lora_rank 128<br />--lora_alpha 256<br />--lora_dropout 0.05<br />--max_seq_length 1024<br />--warmup_ratio 0.05 | yentinglin/Llama-3.1-Taiwan-8B | 9.68309375  |                                                              |
+| 17   | --model_path "yentinglin/Llama-3.1-Taiwan-8B" <br />--epoch 5<br />--learning_rate 5e-5<br />--train_batch_size 2 <br />--gradient_accumulation_steps 16<br />--eval_batch_size 2<br />--lora_rank 128<br />--lora_alpha 256<br />--lora_dropout 0.05<br />--max_seq_length 1024<br />--warmup_ratio 0.05 | yentinglin/Llama-3.1-Taiwan-8B | 6.06021875  | 降低学习率                                                   |
+
+
+
+
+
 ## 免责声明 | Disclaimer
 
 本项目仅供学习和研究使用。使用者须遵守当地的法律法规，包括但不限于 DMCA 相关法律。我们不对任何非法使用承担责任。
